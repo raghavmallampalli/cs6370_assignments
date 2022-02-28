@@ -1,0 +1,8 @@
+.history/
+.vscode/
+
+src/__pycache__/
+src/.ipynb_checkpoints/
+.ipynb_checkpoints/
+
+output/
