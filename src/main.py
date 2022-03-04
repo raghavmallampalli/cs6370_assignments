@@ -2,11 +2,13 @@ from sentenceSegmentation import SentenceSegmentation
 from tokenization import Tokenization
 from inflectionReduction import InflectionReduction
 from stopwordRemoval import StopwordRemoval
+from informationRetrieval import InformationRetrieval
+from evaluation import Evaluation
 
+from sys import version_info
 import argparse
 import json
-from sys import version_info
-
+import matplotlib.pyplot as plt
 
 # Input compatibility for Python 2 and Python 3
 if version_info.major == 3:
@@ -24,14 +26,19 @@ class SearchEngine:
 
 	def __init__(self, args):
 		self.args = args
+
 		self.tokenizer = Tokenization()
 		self.sentenceSegmenter = SentenceSegmentation()
 		self.inflectionReducer = InflectionReduction()
 		self.stopwordRemover = StopwordRemoval()
 
+		self.informationRetriever = InformationRetrieval()
+		self.evaluator = Evaluation()
+
+
 	def segmentSentences(self, text):
 		"""
-		Return the required sentence segmenter
+		Call the required sentence segmenter
 		"""
 		if self.args.segmenter == "naive":
 			return self.sentenceSegmenter.naive(text)
@@ -40,7 +47,7 @@ class SearchEngine:
 
 	def tokenize(self, text):
 		"""
-		Return the required tokenizer
+		Call the required tokenizer
 		"""
 		if self.args.tokenizer == "naive":
 			return self.tokenizer.naive(text)
@@ -49,13 +56,13 @@ class SearchEngine:
 
 	def reduceInflection(self, text):
 		"""
-		Return the required stemmer/lemmatizer
+		Call the required stemmer/lemmatizer
 		"""
 		return self.inflectionReducer.reduce(text)
 
 	def removeStopwords(self, text):
 		"""
-		Return the required stopword remover
+		Call the required stopword remover
 		"""
 		return self.stopwordRemover.fromList(text)
 
@@ -97,7 +104,7 @@ class SearchEngine:
 		"""
 		Preprocess the documents
 		"""
-
+		
 		# Segment docs
 		segmentedDocs = []
 		for doc in docs:
@@ -127,30 +134,76 @@ class SearchEngine:
 		return preprocessedDocs
 
 
-
 	def evaluateDataset(self):
 		"""
-		Evaluate document-query relevances for all document-query pairs
+		- preprocesses the queries and documents, stores in output folder
+		- invokes the IR system
+		- evaluates precision, recall, fscore, nDCG and MAP 
+		  for all queries in the Cranfield dataset
+		- produces graphs of the evaluation metrics in the output folder
 		"""
 
 		# Read queries
 		queries_json = json.load(open(args.dataset + "cran_queries.json", 'r'))[:]
-		queries = [item["query"] for item in queries_json]
-		# Process queries
+		query_ids, queries = [item["query number"] for item in queries_json], \
+								[item["query"] for item in queries_json]
+		# Process queries 
 		processedQueries = self.preprocessQueries(queries)
 
 		# Read documents
-		docs_json = json.load(open(args.dataset + "cran_docs.json", 'r'))[:][:4]
-		docs = [item["body"] for item in docs_json]
+		docs_json = json.load(open(args.dataset + "cran_docs.json", 'r'))[:]
+		doc_ids, docs = [item["id"] for item in docs_json], \
+								[item["body"] for item in docs_json]
 		# Process documents
 		processedDocs = self.preprocessDocs(docs)
 
-		# Remaning code will be added later
+		# Build document index
+		self.informationRetriever.buildIndex(processedDocs, doc_ids)
+		# Rank the documents for each query
+		doc_IDs_ordered = self.informationRetriever.rank(processedQueries)
 
+		# Read relevance judements
+		qrels = json.load(open(args.dataset + "cran_qrels.json", 'r'))[:]
 
+		# Calculate precision, recall, f-score, MAP and nDCG for k = 1 to 10
+		precisions, recalls, fscores, MAPs, nDCGs = [], [], [], [], []
+		for k in range(1, 11):
+			precision = self.evaluator.meanPrecision(
+				doc_IDs_ordered, query_ids, qrels, k)
+			precisions.append(precision)
+			recall = self.evaluator.meanRecall(
+				doc_IDs_ordered, query_ids, qrels, k)
+			recalls.append(recall)
+			fscore = self.evaluator.meanFscore(
+				doc_IDs_ordered, query_ids, qrels, k)
+			fscores.append(fscore)
+			print("Precision, Recall and F-score @ " +  
+				str(k) + " : " + str(precision) + ", " + str(recall) + 
+				", " + str(fscore))
+			MAP = self.evaluator.meanAveragePrecision(
+				doc_IDs_ordered, query_ids, qrels, k)
+			MAPs.append(MAP)
+			nDCG = self.evaluator.meanNDCG(
+				doc_IDs_ordered, query_ids, qrels, k)
+			nDCGs.append(nDCG)
+			print("MAP, nDCG @ " +  
+				str(k) + " : " + str(MAP) + ", " + str(nDCG))
+
+		# Plot the metrics and save plot 
+		plt.plot(range(1, 11), precisions, label="Precision")
+		plt.plot(range(1, 11), recalls, label="Recall")
+		plt.plot(range(1, 11), fscores, label="F-Score")
+		plt.plot(range(1, 11), MAPs, label="MAP")
+		plt.plot(range(1, 11), nDCGs, label="nDCG")
+		plt.legend()
+		plt.title("Evaluation Metrics - Cranfield Dataset")
+		plt.xlabel("k")
+		plt.savefig(args.out_folder + "eval_plot.png")
+
+		
 	def handleCustomQuery(self):
 		"""
-		Take a custom query as input and return relevances with all documents
+		Take a custom query as input and return top five relevant documents
 		"""
 
 		#Get query
@@ -160,12 +213,22 @@ class SearchEngine:
 		processedQuery = self.preprocessQueries([query])[0]
 
 		# Read documents
-		docs_json = json.load(open(args.dataset + "cran_docs.json", 'r'))[:10]
-		docs = [item["body"] for item in docs_json]
+		docs_json = json.load(open(args.dataset + "cran_docs.json", 'r'))[:]
+		doc_ids, docs = [item["id"] for item in docs_json], \
+							[item["body"] for item in docs_json]
 		# Process documents
 		processedDocs = self.preprocessDocs(docs)
 
-		# Remaning code will be added later
+		# Build document index
+		self.informationRetriever.buildIndex(processedDocs, doc_ids)
+		# Rank the documents for the query
+		doc_IDs_ordered = self.informationRetriever.rank([processedQuery])[0]
+
+		# Print the IDs of first five documents
+		print("\nTop five document IDs : ")
+		for id_ in doc_IDs_ordered[:5]:
+			print(id_)
+
 
 
 if __name__ == "__main__":
@@ -174,24 +237,24 @@ if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description='main.py')
 
 	# Tunable parameters as external arguments
-	parser.add_argument('-dataset', default = "cranfield/",
+	parser.add_argument('-dataset', default = "cranfield/", 
 						help = "Path to the dataset folder")
-	parser.add_argument('-out_folder', default = "output/",
+	parser.add_argument('-out_folder', default = "output/", 
 						help = "Path to output folder")
 	parser.add_argument('-segmenter', default = "punkt",
 	                    help = "Sentence Segmenter Type [naive|punkt]")
 	parser.add_argument('-tokenizer',  default = "ptb",
 	                    help = "Tokenizer Type [naive|ptb]")
-	parser.add_argument('-custom', action = "store_true",
+	parser.add_argument('-custom', action = "store_true", 
 						help = "Take custom query as input")
-
+	
 	# Parse the input arguments
 	args = parser.parse_args()
 
 	# Create an instance of the Search Engine
 	searchEngine = SearchEngine(args)
 
-	# Either handle query from user or evaluate on the complete dataset
+	# Either handle query from user or evaluate on the complete dataset 
 	if args.custom:
 		searchEngine.handleCustomQuery()
 	else:
