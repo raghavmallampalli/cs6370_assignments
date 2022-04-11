@@ -5,10 +5,12 @@ src/__pycache__/
 src/.ipynb_checkpoints/
 .ipynb_checkpoints/
 
-output/
+output*/
 a1_submission/
+a2_submission/
 
 *.zip
+*.pkl
 
 scratch.py
 scratch.ipynb
